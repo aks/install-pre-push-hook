@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# install-pre-push-hook DIR ..
+
+PROG=${0##*/}
+
+# this script installs the pre-push hook into the named (or current) .git
+# repos.  by default, the pre-push hook protects the "master" branch.
+
+usage() {
+  cat 1<&2 <<EOF
+usage: $PROG [options] [DIR ...]
+Install a "pre-push" hook script into each named directory, which must be a git
+repository.  If no directories are named, the current directory is assumed.
+
+The "pre-push" hook resides in ".git/hooks/pre-push" within each git repository.
+
+Options
+  -h   show this help
+  -n   show the commands but do not actuall run them
+  -v   be verbose (explain what's going on)
+EOF
+  exit
+}
+
+### ripped out of github.com/aks/bash-lib/talk-utils.sh
+
+talk()    { echo 1>&2 "$@" ; return 0 ;}
+vtalk()   { (( $verbose )) && talk "$@" ; }
+
+error() {
+  local code=2
+  case "$1" in [0-9]*) code=$1 ; shift ;; esac
+  talk "$@"
+  exit $code
+}
+
+### ripped out of github.com/aks/bash-lib/run-utils.sh
+
+# run COMMAND ARGS ...
+
+run() {
+  if [[ -n "$norun" ]]; then
+    talk "(norun) $@"
+  else
+    safe_run "$@"
+  fi
+  return 0
+}
+
+# safe_run COMMAND ARGS
+# Safe run -- run command even in "$norun" mode
+
+safe_run() {
+  if [[ -n "$verbose$norun" ]]; then
+    talk ">> $@"
+  fi
+  if ! eval "$@" ; then
+    code=$?
+    return $code
+  fi
+  return 0
+}
+
+#### main script
+
+set_git_hooks_dir_path() {
+  set_git_dir_path
+  git_hooks_dir_path="$git_dir_path/hooks"
+  if [[ ! -d "$git_hooks_dir_path" ]] ; then
+    error "$git_hooks_dir_path does not exist!"
+  fi
+}
+
+set_git_dir_path() {
+  local dir_path=`run_git_dir`
+  git_dir_path=`absolute_path "$dir_path"`
+  if [[ ! -d "$git_dir_path" ]]; then
+    error "Not in a repo!"
+  fi
+}
+
+run_git_dir() {
+  safe_run "git rev-parse --git-dir"
+}
+
+absolute_path() {
+  case "$1" in
+    /*) echo "$1" ;;
+    *)  echo "`pwd`/$1" ;;
+  esac
+}
+
+install_pre_push_script() {
+  if [[ -d "$1" && "$1" != '.' ]] ; then
+    vtalk "Installing pre-push hook into $1"
+    safe_run "cd $1" || error "Cannot chdir $1!"
+  fi
+  set_git_hooks_dir_path
+  pre_push_path="$git_hooks_dir_path/pre-push"
+  create_new_pre_push_script "$pre_push_path"
+  if [[ -e "$pre_push_path" ]] ; then       # pre-push hook already exists
+    if cmp -s "${pre_push_path}" "${pre_push_path}.new" ; then
+      talk "pre-push hook already installed!"
+      run "rm -f \"${pre_push_path}.new\""
+    else
+      run "mv \"$pre_push_path\" \"$pre_push_path.old\""
+      run "mv \"$pre_push_path.new\" \"$pre_push_path\""
+      talk "pre-push hook updated"
+    fi
+  else
+    run "mv \"$pre_push_path.new\" \"$pre_push_path\""
+    talk "pre-push hook installed"
+  fi
+}
+
+create_new_pre_push_script() {
+  local dest_path="$1"
+  cat <<'EOF' >"${dest_path}.new"
+#!/bin/bash
+
+protected_branch='master'
+current_branch=$(git symbolic-ref HEAD | sed -e 's,.*/\(.*\),\1,')
+
+if [ $protected_branch = $current_branch ] ; then
+  read -p "You're about to push master, is that what you intended? [y|n] " -n 1 -r < /dev/tty
+  echo
+  if echo $REPLY | grep -E '^[Yy]$' > /dev/null ; then
+    exit 0              # push will execute
+  fi
+  exit 1                # push will not execute
+fi
+exit 0                  # push will execute
+EOF
+  chmod +x $dest_path
+}
+
+norun= verbose=
+while getopts 'hnv' opt ; do
+  case "$opt" in
+    h) usage ;;
+    n) norun=1 ;;
+    v) verbose=1 ;;
+  esac
+done
+shift $(( OPTIND - 1 ))
+
+for dir in ${*:-.} ; do
+  install_pre_push_script "$dir"
+done
+exit

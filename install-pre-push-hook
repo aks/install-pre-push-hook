@@ -131,7 +131,7 @@ if [ $protected_branch = $current_branch ] ; then
 fi
 exit 0                  # push will execute
 EOF
-  chmod +x $dest_path
+  chmod +x "$dest_path.new"
 }
 
 norun= verbose=
